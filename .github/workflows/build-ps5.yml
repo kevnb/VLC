@@ -19,6 +19,9 @@ jobs:
       PS5_PAYLOAD_SDK: ${{ github.workspace }}/ps5/PS5_Vulkan/.deps/native/ps5-payload-sdk
       VLC_PS5_WORK: ${{ github.workspace }}/ps5/vlc-ps5
       PS5_CLANG: clang-18
+      # The PS5_Vulkan VLC 0.4 was built against: patches/mesa/0001 applies to
+      # the Mesa it pins (15a5e99), not to the per-size buffer sets of later ones.
+      PS5_VULKAN_REV: 4271e2e309d9a7eea3a893f5b94427bb78e586ed
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,14 +48,18 @@ jobs:
       - name: PS5_Vulkan and its forks (payload SDK, Mesa)
         run: |
           mkdir -p ps5
-          git clone --depth 1 https://github.com/mihawk-99/PS5_Vulkan ps5/PS5_Vulkan
+          git init -q ps5/PS5_Vulkan
+          git -C ps5/PS5_Vulkan remote add origin https://github.com/mihawk-99/PS5_Vulkan
+          git -C ps5/PS5_Vulkan fetch -q --depth 1 origin "$PS5_VULKAN_REV"
+          git -C ps5/PS5_Vulkan checkout -q FETCH_HEAD
           # Its scripts read both forks from beside it, at the commits they pin.
-          sdk_rev=$(sed -n 's/^sdk_revision=\([0-9a-f]*\)$/\1/p' ps5/PS5_Vulkan/tools/setup-native-dependencies.sh)
+          sdk_rev=$(grep -m1 -oE '^sdk_revision=[0-9a-f]{40}' ps5/PS5_Vulkan/tools/setup-native-dependencies.sh | cut -d= -f2)
           echo "payload SDK revision $sdk_rev"
           git init -q ps5/PS5_PayloadSDK
           git -C ps5/PS5_PayloadSDK remote add origin https://github.com/mihawk-99/PS5_PayloadSDK
           git -C ps5/PS5_PayloadSDK fetch -q --depth 1 origin "$sdk_rev"
-          rev=$(sed -n 's/^mesa_revision=\${PS5_MESA_REVISION:-\([0-9a-f]*\)}$/\1/p' ps5/PS5_Vulkan/tools/build-radv.sh)
+          rev=$(grep -m1 -E '^mesa_revision=' ps5/PS5_Vulkan/tools/build-radv.sh | grep -oE '[0-9a-f]{40}')
+          [ -n "$sdk_rev" ] && [ -n "$rev" ]
           echo "RADV revision $rev"
           git init -q ps5/PS5_Mesa
           git -C ps5/PS5_Mesa remote add origin https://github.com/mihawk-99/PS5_Mesa
