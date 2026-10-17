@@ -1,0 +1,99 @@
+# Builds the PS5 title (dist/PPSA85300) the way README.md's "Building" says,
+# on a GitHub runner: PS5_Vulkan (payload SDK, RADV, clean-room libc.prx,
+# signing tool), then the libraries, libvlc and the title. The folder comes
+# out as an artifact to copy to /data/homebrew/.
+name: Build PS5 title
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [hdmi-passthrough]
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      PS5_VULKAN: ${{ github.workspace }}/ps5/PS5_Vulkan
+      VLC_PS5_WORK: ${{ github.workspace }}/ps5/vlc-ps5
+      PS5_CLANG: clang-18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: vlc
+
+      - name: Host packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-18 lld-18 llvm-18 meson ninja-build rsync cmake pkgconf \
+            autoconf automake libtool gettext autopoint bison flex nasm yasm \
+            wget curl unzip xz-utils glslang-tools python3-mako python3-markupsafe
+          # PS5_Vulkan's tools call clang, lld and llvm-* without a version.
+          for t in clang clang++ ld.lld llvm-ar llvm-nm llvm-objcopy llvm-ranlib llvm-strip; do
+            src=$(command -v "$t-18" || true)
+            [ -n "$src" ] && sudo ln -sf "$src" /usr/local/bin/$t
+          done
+
+      - name: PS5_Vulkan and the Mesa fork
+        run: |
+          mkdir -p ps5
+          git clone --depth 1 https://github.com/mihawk-99/PS5_Vulkan ps5/PS5_Vulkan
+          rev=$(sed -n 's/^mesa_revision=\${PS5_MESA_REVISION:-\([0-9a-f]*\)}$/\1/p' ps5/PS5_Vulkan/tools/build-radv.sh)
+          echo "RADV revision $rev"
+          git init -q ps5/PS5_Mesa
+          git -C ps5/PS5_Mesa remote add origin https://github.com/mihawk-99/PS5_Mesa
+          git -C ps5/PS5_Mesa fetch -q --depth 1 origin "$rev"
+
+      - name: Payload SDK, libc.prx and the signing tool
+        working-directory: ps5/PS5_Vulkan
+        run: |
+          make deps
+          make
+
+      - name: RADV (release)
+        working-directory: ps5/PS5_Vulkan
+        run: tools/build-radv.sh release
+
+      - name: VLC 3.0.24 source
+        run: |
+          mkdir -p "$VLC_PS5_WORK/src"
+          cd "$VLC_PS5_WORK/src"
+          curl -fLO https://download.videolan.org/pub/videolan/vlc/3.0.24/vlc-3.0.24.tar.xz
+          tar xf vlc-3.0.24.tar.xz
+
+      - name: Libraries
+        working-directory: vlc
+        run: TARGET=ps5 bash ps5/deps/build-deps.sh
+
+      - name: libvlc
+        working-directory: vlc
+        run: TARGET=ps5 bash ps5/configure-vlc.sh
+
+      - name: RADV patches and the title
+        working-directory: vlc
+        run: |
+          bash ps5/radv-patches.sh
+          bash ps5/build-title.sh
+
+      - name: Passthrough logic tests
+        working-directory: vlc
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -Isrc tests/passthrough_test.c src/passthrough.c -o /tmp/pt
+          /tmp/pt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PPSA85300
+          path: vlc/dist/PPSA85300
+          if-no-files-found: error
+
+      - name: Logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            ps5/vlc-ps5/logs
+            ps5/vlc-ps5/build-vlc-ps5/config.log
+          if-no-files-found: ignore
