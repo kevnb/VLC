@@ -71,7 +71,7 @@ jobs:
 
       - name: RADV (release)
         working-directory: ps5/PS5_Vulkan
-        run: tools/build-radv.sh release
+        run: bash tools/build-radv.sh release
 
       - name: VLC 3.0.24 source
         run: |
