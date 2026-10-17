@@ -60,7 +60,12 @@ jobs:
         working-directory: ps5/PS5_Vulkan
         run: |
           make deps
-          make
+          # Plain make builds PS5_Vulkan's hello-world app; its link misses the
+          # platform layer at the pinned revision (ps5_fp_ieee). VLC doesn't use
+          # that app, only what make builds before it: libc.prx and the tool.
+          make || echo "PS5_Vulkan's hello-world app didn't link; not needed for VLC"
+          test -x build/host/ps5-native-tool
+          (cd runtime && sha256sum --check --strict libc.prx.sha256)
 
       - name: RADV (release)
         working-directory: ps5/PS5_Vulkan
