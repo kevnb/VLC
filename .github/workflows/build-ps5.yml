@@ -26,19 +26,30 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang-18 lld-18 llvm-18 meson ninja-build rsync cmake pkgconf \
+            clang-18 lld-18 llvm-18 ninja-build rsync cmake pkgconf \
             autoconf automake libtool gettext autopoint bison flex nasm yasm \
-            wget curl unzip xz-utils glslang-tools python3-mako python3-markupsafe
+            wget curl unzip xz-utils glslang-tools python3-mako python3-markupsafe \
+            python3-yaml python3-packaging python3-pip \
+            llvm-18-dev libclang-18-dev libclang-cpp18-dev libclc-18-dev libllvmspirvlib-18-dev \
+            spirv-tools zlib1g-dev
+          # Mesa 26 needs a newer meson than Ubuntu 24.04's.
+          sudo pip3 install --break-system-packages 'meson>=1.6'
           # PS5_Vulkan's tools call clang, lld and llvm-* without a version.
           for t in clang clang++ ld.lld llvm-ar llvm-nm llvm-objcopy llvm-ranlib llvm-strip; do
             src=$(command -v "$t-18" || true)
             [ -n "$src" ] && sudo ln -sf "$src" /usr/local/bin/$t
           done
 
-      - name: PS5_Vulkan and the Mesa fork
+      - name: PS5_Vulkan and its forks (payload SDK, Mesa)
         run: |
           mkdir -p ps5
           git clone --depth 1 https://github.com/mihawk-99/PS5_Vulkan ps5/PS5_Vulkan
+          # Its scripts read both forks from beside it, at the commits they pin.
+          sdk_rev=$(sed -n 's/^sdk_revision=\([0-9a-f]*\)$/\1/p' ps5/PS5_Vulkan/tools/setup-native-dependencies.sh)
+          echo "payload SDK revision $sdk_rev"
+          git init -q ps5/PS5_PayloadSDK
+          git -C ps5/PS5_PayloadSDK remote add origin https://github.com/mihawk-99/PS5_PayloadSDK
+          git -C ps5/PS5_PayloadSDK fetch -q --depth 1 origin "$sdk_rev"
           rev=$(sed -n 's/^mesa_revision=\${PS5_MESA_REVISION:-\([0-9a-f]*\)}$/\1/p' ps5/PS5_Vulkan/tools/build-radv.sh)
           echo "RADV revision $rev"
           git init -q ps5/PS5_Mesa
