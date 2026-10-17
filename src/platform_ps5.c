@@ -878,7 +878,7 @@ bool plat_bitstream_sink(struct pt_sink *sink)
     }
     pt_sink_parse(info, sizeof(info), sink);
     char name[14] = { 0 };
-    memcpy(name, info + 0x0B, 13);
+    memcpy(name, info + PT_INFO_NAME_AT, 13);
     for (char *c = name; *c; c++)
         if (*c < 0x20 || *c > 0x7E)
             *c = 0;
@@ -897,10 +897,12 @@ static void bs_close_locked(void)
     struct pt_carrier c = pt_carrier_for((enum pt_kind)bs_kind);
     if (bs_port >= 0) {
         sceAudioOutOutput(bs_port, NULL); /* the last grain */
-        int rc = c.sys ? sceAudioOutSysClose(bs_port) : sceAudioOutExClose(bs_port);
+        int rc = c.sys_api ? sceAudioOutSysClose(bs_port) : sceAudioOutExClose(bs_port);
         fprintf(stderr, "VLC-PS5: passthrough: close %#x\n", rc);
         usleep(BS_AFTER_CLOSE_MS * 1000);
     }
+    /* The Ex reset also ends a Sys (TrueHD) mode: both configure calls end
+     * in the same internal routine (FINDINGS.md section 3). */
     int rc = sceAudioOutExConfigureOutput(0, 0, 0xFF, 0xFF, 0);
     fprintf(stderr, "VLC-PS5: passthrough: %s off, normal output %#x\n", pt_kind_name((enum pt_kind)bs_kind),
             rc);
@@ -917,19 +919,19 @@ static bool bs_open_locked(enum pt_kind kind)
     int64_t since = bs_now_ms() - bs_reset_ms;
     if (since < BS_BEFORE_OPEN_MS)
         usleep((useconds_t)(BS_BEFORE_OPEN_MS - since) * 1000);
-    int port = c.sys ? sceAudioOutSysOpen(0xFF, c.mode) : sceAudioOutExOpen(0xFF, c.mode);
+    int port = c.sys_api ? sceAudioOutSysOpen(0xFF, c.mode) : sceAudioOutExOpen(0xFF, c.mode);
     if (port < 0) {
-        fprintf(stderr, "VLC-PS5: passthrough: %sOpen(%d) %#x\n", c.sys ? "Sys" : "Ex", c.mode, port);
+        fprintf(stderr, "VLC-PS5: passthrough: %sOpen(%d) %#x\n", c.sys_api ? "Sys" : "Ex", c.mode, port);
         return false;
     }
     /* SysConfigureOutput's first argument is the output type (1, HDMI);
      * ExConfigureOutput's must be 0. */
-    int rc = c.sys ? sceAudioOutSysConfigureOutput(1, 0, c.mode, BS_TARGET_HDMI, 0)
+    int rc = c.sys_api ? sceAudioOutSysConfigureOutput(1, 0, c.mode, BS_TARGET_HDMI, 0)
                    : sceAudioOutExConfigureOutput(0, 0, c.mode, BS_TARGET_HDMI, 0);
     fprintf(stderr, "VLC-PS5: passthrough: %s on mode %d, port %#x, configure %#x\n", pt_kind_name(kind),
             c.mode, port, rc);
     if (rc < 0) {
-        if (c.sys)
+        if (c.sys_api)
             sceAudioOutSysClose(port);
         else
             sceAudioOutExClose(port);
@@ -959,19 +961,11 @@ bool plat_bitstream_start(int kind)
         return false;
     pthread_mutex_lock(&bs_lock);
     bool ok = true;
-    switch (pt_plan((enum pt_kind)bs_kind, (enum pt_kind)kind)) {
-    case PT_STAY:
-        break;
-    case PT_SWITCH:
+    enum pt_step step = pt_plan((enum pt_kind)bs_kind, (enum pt_kind)kind);
+    if (step == PT_SWITCH)
         bs_close_locked();
+    if (step == PT_SWITCH || step == PT_OPEN)
         ok = bs_open_locked((enum pt_kind)kind);
-        break;
-    case PT_OPEN:
-        ok = bs_open_locked((enum pt_kind)kind);
-        break;
-    case PT_RESET: /* not reachable: kind is a bitstream */
-        break;
-    }
     bs_writing = ok;
     pthread_mutex_unlock(&bs_lock);
     return ok;

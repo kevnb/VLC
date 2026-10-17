@@ -4981,7 +4981,10 @@ std::string st_value(int id)
     case ST_SLANG: return lang_name(player_sub_language(), true);
     case ST_SOUND: return player_audio_output_name(player_audio_output());
     case ST_PTDELAY: return trf("%d ms", player_passthrough_delay());
-    case ST_NIGHT: return player_night_mode() ? "On" : "Off";
+    case ST_NIGHT:
+        if (player_passthrough_on())
+            return "Soundbar decodes";
+        return player_night_mode() ? "On" : "Off";
     case ST_SPEAKERS: return "";
     case ST_THEME: {
         int i = pref_int("theme", 0);
@@ -5047,6 +5050,8 @@ void st_change(int id, int step)
             if (player_speaker_test(0)) {
                 modal = SPEAKERS;
                 modal_focus = 0;
+            } else if (player_passthrough_on()) {
+                toast("Your soundbar is decoding a file: stop it for the speaker test", 3);
             } else {
                 toast("The console didn't give VLC an 8-channel output", 3);
             }
@@ -5890,14 +5895,17 @@ void modal_tracks()
     if (all || panel_section == SEC_AUDIO) {
         e.push_back({ 0, 0, "Audio", false, "" });
         char vol[32];
-        if (player_passthrough_on()) {
-            /* The soundbar decodes: volume, equalizer and night mode are its own. */
-            e.push_back({ 5, 0, "Decoded by your soundbar", false, "" });
-            e.push_back({ 7, SET_AUDIO_DELAY, "Audio delay", false, "" });
+        /* While the soundbar decodes, volume, equalizer and night mode are its
+         * own: a line saying so instead of controls that do nothing. */
+        bool soundbar = player_passthrough_on();
+        if (soundbar) {
+            e.push_back({ 0, 0, tr("Decoded by your soundbar"), false, "" });
         } else {
             snprintf(vol, sizeof(vol), tr("Volume  %d%%"), player_volume());
             e.push_back({ 5, 0, vol, false, "" });
-            e.push_back({ 7, SET_AUDIO_DELAY, "Audio delay", false, "" });
+        }
+        e.push_back({ 7, SET_AUDIO_DELAY, "Audio delay", false, "" });
+        if (!soundbar) {
             e.push_back({ 7, SET_EQ, "Equalizer", false, "" });
             e.push_back({ 7, SET_NIGHT, "Night mode", false, "" });
         }
@@ -6850,6 +6858,9 @@ void player_screen()
                     snprintf(msg, sizeof(msg), "%+d s", (int)(by_ms / 1000));
                     toast(msg, 1);
                     buzz(0.3f, 30);
+                } else if (fabsf(dy) > 0.25f && fabsf(dy) > fabsf(dx) * 1.5f && player_passthrough_on()) {
+                    /* The soundbar decodes: its own remote sets the volume. */
+                    toast("Decoded by your soundbar: use its volume", 1.5);
                 } else if (fabsf(dy) > 0.25f && fabsf(dy) > fabsf(dx) * 1.5f) {
                     player_set_volume(player_volume() - (int)(dy * 100));
                     char msg[32];

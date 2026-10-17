@@ -48,6 +48,7 @@
 #include "gfx.h"
 #include "image.h"
 #include "lang.h"
+#include "passthrough.h"
 #include "platform.h"
 #include "prefs.h"
 #include "subconv.h"
@@ -2882,12 +2883,12 @@ const char *player_audio_output_name(int mode)
 
 int player_passthrough_delay()
 {
-    return std::max(0, std::min(500, pref_int("pt_delay", 0)));
+    return std::max(0, std::min(PT_DELAY_MAX_MS, pref_int("pt_delay", 0)));
 }
 
 void player_set_passthrough_delay(int ms)
 {
-    pref_set("pt_delay", std::max(0, std::min(500, ms)));
+    pref_set("pt_delay", std::max(0, std::min(PT_DELAY_MAX_MS, ms)));
     apply_passthrough_vars();
 }
 

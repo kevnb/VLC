@@ -24,11 +24,11 @@ static int failures, checks;
 static void make_info(uint8_t *info, const uint8_t (*sad)[2], uint32_t n)
 {
     memset(info, 0, PT_MONITOR_INFO_SIZE);
-    memcpy(info + 0x0B, "LG ULTRAGEAR", 12);
-    memcpy(info + 0x94, &n, sizeof(n));
+    memcpy(info + PT_INFO_NAME_AT, "LG ULTRAGEAR", 12);
+    memcpy(info + PT_INFO_COUNT_AT, &n, sizeof(n));
     for (uint32_t i = 0; i < n; i++) {
-        info[0x98 + i * 8] = sad[i][0];
-        info[0x98 + i * 8 + 1] = sad[i][1];
+        info[PT_INFO_SADS_AT + i * 8] = sad[i][0];
+        info[PT_INFO_SADS_AT + i * 8 + 1] = sad[i][1];
     }
 }
 
@@ -50,11 +50,11 @@ static void test_sink_parse(void)
     CHECK(!pt_sink_has(&sink, 9 /* ATRAC */));
 
     /* Too short a buffer: nothing. */
-    CHECK(!pt_sink_parse(info, 0x97, &sink));
+    CHECK(!pt_sink_parse(info, PT_INFO_SADS_AT - 1, &sink));
 
     /* A count that runs past the buffer stops at the last whole entry. */
     uint32_t big = 1000;
-    memcpy(info + 0x94, &big, sizeof(big));
+    memcpy(info + PT_INFO_COUNT_AT, &big, sizeof(big));
     CHECK(pt_sink_parse(info, sizeof(info), &sink));
     CHECK(sink.count == 9); /* entries after the ninth are zero: the list ends */
 
@@ -113,16 +113,16 @@ static void test_carriers(void)
 {
     /* The verified table: Ex modes 0, 2, 3, 4; TrueHD on Sys mode 5. */
     struct pt_carrier c = pt_carrier_for(PT_AC3);
-    CHECK(!c.sys && c.mode == 0 && c.grain_frames == 256 && c.rate == 48000 && c.frame_bytes == 4 &&
+    CHECK(!c.sys_api && c.mode == 0 && c.grain_frames == 256 && c.rate == 48000 && c.frame_bytes == 4 &&
           c.channels == 2);
     c = pt_carrier_for(PT_DTS);
-    CHECK(!c.sys && c.mode == 2 && c.grain_frames == 256 && c.rate == 48000);
+    CHECK(!c.sys_api && c.mode == 2 && c.grain_frames == 256 && c.rate == 48000);
     c = pt_carrier_for(PT_EAC3);
-    CHECK(!c.sys && c.mode == 3 && c.grain_frames == 1024 && c.rate == 192000 && c.frame_bytes == 4);
+    CHECK(!c.sys_api && c.mode == 3 && c.grain_frames == 1024 && c.rate == 192000 && c.frame_bytes == 4);
     c = pt_carrier_for(PT_DTSHD);
-    CHECK(!c.sys && c.mode == 4 && c.grain_frames == 1024 && c.rate == 192000);
+    CHECK(!c.sys_api && c.mode == 4 && c.grain_frames == 1024 && c.rate == 192000);
     c = pt_carrier_for(PT_TRUEHD);
-    CHECK(c.sys && c.mode == 5 && c.grain_frames == 1024 && c.rate == 192000 && c.frame_bytes == 16 &&
+    CHECK(c.sys_api && c.mode == 5 && c.grain_frames == 1024 && c.rate == 192000 && c.frame_bytes == 16 &&
           c.channels == 8);
 
     CHECK(pt_grain_bytes(PT_AC3) == 1024);

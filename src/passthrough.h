@@ -66,6 +66,9 @@ struct pt_sink {
  * descriptors as a 32-bit value at +0x94, then 8-byte entries from +0x98
  * (coding type, channels, ...). False if the buffer is too short. */
 #define PT_MONITOR_INFO_SIZE 0x180
+#define PT_INFO_NAME_AT 0x0B  /* the monitor's name, 13 characters */
+#define PT_INFO_COUNT_AT 0x94
+#define PT_INFO_SADS_AT 0x98
 bool pt_sink_parse(const uint8_t *info, size_t size, struct pt_sink *out);
 bool pt_sink_has(const struct pt_sink *sink, int cea_coding);
 
@@ -78,7 +81,7 @@ enum pt_kind pt_kind_for(enum pt_codec codec, const struct pt_sink *sink);
  * TrueHD's port is opened as "768 kHz" but takes its 16-byte frames at
  * 192 kHz, so rate is 192000 there. */
 struct pt_carrier {
-    bool sys;              /* sceAudioOutSys* (TrueHD), else sceAudioOutEx* */
+    bool sys_api;          /* sceAudioOutSys* (TrueHD), else sceAudioOutEx* */
     int mode;              /* the Open and ConfigureOutput mode */
     unsigned grain_frames; /* frames per sceAudioOutOutput call */
     unsigned rate;         /* frames per second */
@@ -104,6 +107,9 @@ enum pt_step pt_plan(enum pt_kind current, enum pt_kind wanted);
  * more than 60 ms late is dropped whole (a burst can't be cut), else sent. */
 enum pt_slot { PT_EARLY, PT_DUE, PT_LATE };
 enum pt_slot pt_schedule(int64_t due_us, int64_t slot_us);
+
+/* The longest sink decoding delay the app makes up for. */
+#define PT_DELAY_MAX_MS 500
 
 /* One grain of IEC 61937 null data: preamble Pa Pb, data type 0, zeros. It
  * keeps the receiver locked on the bitstream while nothing is due. */

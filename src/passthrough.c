@@ -10,12 +10,12 @@
 bool pt_sink_parse(const uint8_t *info, size_t size, struct pt_sink *out)
 {
     memset(out, 0, sizeof(*out));
-    if (!info || size < 0x98)
+    if (!info || size < PT_INFO_SADS_AT)
         return false;
     uint32_t n;
-    memcpy(&n, info + 0x94, sizeof(n));
+    memcpy(&n, info + PT_INFO_COUNT_AT, sizeof(n));
     for (uint32_t i = 0; i < n && out->count < PT_SINK_MAX; i++) {
-        size_t at = 0x98 + (size_t)i * 8;
+        size_t at = PT_INFO_SADS_AT + (size_t)i * 8;
         if (at + 8 > size)
             break;
         /* A coding type of 0 or above 15 isn't a descriptor: the list ended. */

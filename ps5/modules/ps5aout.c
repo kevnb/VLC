@@ -45,7 +45,7 @@ vlc_module_begin()
     add_bool("ps5-passthrough", false, "HDMI passthrough", "Dolby and DTS to the receiver", false)
         change_private()
     add_integer("ps5-passthrough-delay", 0, "Passthrough delay", "Receiver decoding delay (ms)", false)
-        change_integer_range(0, 500)
+        change_integer_range(0, PT_DELAY_MAX_MS)
         change_private()
 vlc_module_end()
 
