@@ -549,7 +549,8 @@ int amem_setup(void **opaque, char *format, unsigned *rate, unsigned *channels)
     memcpy(format, "S16N", 4);
     *rate = AUDIO_RATE;
     unsigned from = *channels, want = 2;
-    if (from > 2 && pref_int("audio_out", 0) == 1 && plat_audio_open_surround())
+    /* Passthrough decodes what it can't pass as surround. */
+    if (from > 2 && player_audio_output() != AUDIO_OUT_STEREO && plat_audio_open_surround())
         want = from >= 7 ? 8 : 6;
     *channels = want;
     std::lock_guard<std::mutex> g(audio_lock);
@@ -1084,6 +1085,18 @@ vlc_object_t *mp_object()
     return (vlc_object_t *)mp;
 }
 
+/* What ps5aout reads when a file's sound starts. */
+void apply_passthrough_vars()
+{
+    vlc_object_t *o = mp_object();
+    if (!o)
+        return;
+    var_Create(o, "ps5-passthrough", VLC_VAR_BOOL | VLC_VAR_DOINHERIT);
+    var_SetBool(o, "ps5-passthrough", player_audio_output() == AUDIO_OUT_PASSTHROUGH);
+    var_Create(o, "ps5-passthrough-delay", VLC_VAR_INTEGER | VLC_VAR_DOINHERIT);
+    var_SetInteger(o, "ps5-passthrough-delay", player_passthrough_delay());
+}
+
 void set_mp_int(const char *name, int64_t value)
 {
     var_SetInteger(mp_object(), name, value);
@@ -1392,6 +1405,13 @@ bool player_init()
     libvlc_audio_set_volume_callback(mp, amem_volume);
     apply_saved_choices();
     libvlc_audio_set_format_callbacks(mp, amem_setup, nullptr);
+#ifndef VLCPS5_HOST
+    /* ps5aout instead of amem: the same callbacks for PCM, plus HDMI
+     * passthrough (amem refuses compressed formats). After the callbacks,
+     * which set "aout" to amem. */
+    var_SetString(mp_object(), "aout", "ps5aout");
+#endif
+    apply_passthrough_vars();
     night_mode = pref_int("night", 0) != 0;
     fprintf(stderr, "player: audio port\n");
     if (plat_audio_open()) {
@@ -1459,6 +1479,8 @@ void player_shutdown()
     audio_running = false;
     if (audio_thread.joinable())
         audio_thread.join();
+    /* Never leave the console's HDMI in a bitstream mode. */
+    plat_bitstream_reset();
     if (vlc)
         libvlc_release(vlc);
     vlc = nullptr;
@@ -2839,12 +2861,39 @@ void player_set_picture(const PictureAdjust &p)
 
 int player_audio_output()
 {
-    return pref_int("audio_out", 0);
+    int mode = pref_int("audio_out", AUDIO_OUT_STEREO);
+    return mode >= 0 && mode < AUDIO_OUT_COUNT ? mode : AUDIO_OUT_STEREO;
 }
 
 void player_set_audio_output(int mode)
 {
     pref_set("audio_out", mode);
+    apply_passthrough_vars();
+}
+
+const char *player_audio_output_name(int mode)
+{
+    switch (mode) {
+    case AUDIO_OUT_SURROUND: return "Surround 5.1 / 7.1";
+    case AUDIO_OUT_PASSTHROUGH: return "Passthrough (soundbar decodes)";
+    default: return "Stereo";
+    }
+}
+
+int player_passthrough_delay()
+{
+    return std::max(0, std::min(500, pref_int("pt_delay", 0)));
+}
+
+void player_set_passthrough_delay(int ms)
+{
+    pref_set("pt_delay", std::max(0, std::min(500, ms)));
+    apply_passthrough_vars();
+}
+
+bool player_passthrough_on()
+{
+    return plat_bitstream_on();
 }
 
 bool player_night_mode()
@@ -2862,6 +2911,10 @@ void player_set_night_mode(bool on)
 
 bool player_speaker_test(int channel)
 {
+    /* The tone is PCM: HDMI back to normal output first (refused while a
+     * file's sound goes to the soundbar as a bitstream). */
+    if (channel >= 0 && !plat_bitstream_reset())
+        return false;
     if (channel >= 0 && !plat_audio_open_surround())
         return false;
     tone_channel = channel;

@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "platform.h"
+#include "passthrough.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -43,6 +44,18 @@ int sceAudioOutInit(void);
 int sceAudioOutOpen(int32_t user_id, int32_t type, int32_t index, uint32_t len, uint32_t freq,
                     uint32_t param);
 int sceAudioOutOutput(int32_t handle, const void *buf);
+/* Passthrough: not in the SDK headers, but its libSceAudioOut stub exports
+ * them, so they link as ordinary imports (a sandboxed app can't look them up
+ * with sceKernelDlsym). NIDs and order: PS5-Audio-Passthrough-Research. */
+int sceAudioOutExOpen(int32_t user_id, int32_t mode);                     /* 6X6dp+07h4U */
+int sceAudioOutExClose(int32_t handle);                                   /* 0TfjSulCV2A */
+int sceAudioOutExConfigureOutput(int32_t zero, uint32_t flags, int32_t mode, int32_t target,
+                                 uint64_t opt);                           /* VcE+gXSwFXI */
+int sceAudioOutSysOpen(int32_t user_id, int32_t mode);                    /* MGkAS4ncQ90 */
+int sceAudioOutSysClose(int32_t handle);                                  /* pKY2S4K-6Mg */
+int sceAudioOutSysConfigureOutput(int32_t type, uint32_t flags, int32_t mode, int32_t target,
+                                  uint64_t opt);                          /* ktdp5iauPQc */
+int sceAudioOutSysGetHdmiMonitorInfo(int32_t type, void *out, uint32_t size); /* Tf9-yOJwF-A */
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance instance,
                                                                   const char *name);
 
@@ -826,6 +839,174 @@ void plat_audio_output_surround(const int16_t *frames)
 {
     if (surround_port >= 0)
         sceAudioOutOutput(surround_port, frames);
+}
+
+/* ---- passthrough ------------------------------------------------------------ */
+
+/* Sony's sequence (citroncore, the Blu-ray player): open the port first, then
+ * switch HDMI with target 1; to undo, drain, close, then mode 0xFF. Receivers
+ * need time to follow a change (they got stuck on the previous format when
+ * changes came back to back), hence the null data after a switch and the gaps
+ * around a reset; the mode is also kept between files of the same kind. */
+#define BS_TARGET_HDMI 1
+#define BS_LEAD_IN_MS 400      /* null data after a switch, before the first burst */
+#define BS_AFTER_CLOSE_MS 250  /* port closed, then the reset */
+#define BS_AFTER_RESET_MS 400  /* reset, then PCM again */
+#define BS_BEFORE_OPEN_MS 1000 /* at least this long since the last reset */
+
+static pthread_mutex_t bs_lock = PTHREAD_MUTEX_INITIALIZER;
+static int bs_kind = PT_NONE; /* the HDMI mode now */
+static int bs_port = -1;
+static bool bs_writing;      /* between plat_bitstream_start and _stop */
+static int64_t bs_reset_ms = -100000;
+
+static int64_t bs_now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+bool plat_bitstream_sink(struct pt_sink *sink)
+{
+    static uint8_t info[PT_MONITOR_INFO_SIZE];
+    memset(info, 0, sizeof(info));
+    int rc = sceAudioOutSysGetHdmiMonitorInfo(1 /* HDMI */, info, sizeof(info));
+    if (rc < 0) {
+        fprintf(stderr, "VLC-PS5: passthrough: monitor info %#x\n", rc);
+        return false;
+    }
+    pt_sink_parse(info, sizeof(info), sink);
+    char name[14] = { 0 };
+    memcpy(name, info + 0x0B, 13);
+    for (char *c = name; *c; c++)
+        if (*c < 0x20 || *c > 0x7E)
+            *c = 0;
+    fprintf(stderr, "VLC-PS5: passthrough: sink \"%s\" lists", name);
+    for (int i = 0; i < sink->count; i++)
+        fprintf(stderr, " %d/%dch", sink->coding[i], sink->channels[i]);
+    fprintf(stderr, "\n");
+    return true;
+}
+
+/* With bs_lock held. */
+static void bs_close_locked(void)
+{
+    if (bs_kind == PT_NONE)
+        return;
+    struct pt_carrier c = pt_carrier_for((enum pt_kind)bs_kind);
+    if (bs_port >= 0) {
+        sceAudioOutOutput(bs_port, NULL); /* the last grain */
+        int rc = c.sys ? sceAudioOutSysClose(bs_port) : sceAudioOutExClose(bs_port);
+        fprintf(stderr, "VLC-PS5: passthrough: close %#x\n", rc);
+        usleep(BS_AFTER_CLOSE_MS * 1000);
+    }
+    int rc = sceAudioOutExConfigureOutput(0, 0, 0xFF, 0xFF, 0);
+    fprintf(stderr, "VLC-PS5: passthrough: %s off, normal output %#x\n", pt_kind_name((enum pt_kind)bs_kind),
+            rc);
+    bs_port = -1;
+    bs_kind = PT_NONE;
+    bs_reset_ms = bs_now_ms();
+    usleep(BS_AFTER_RESET_MS * 1000);
+}
+
+/* With bs_lock held; bs_kind is PT_NONE. */
+static bool bs_open_locked(enum pt_kind kind)
+{
+    struct pt_carrier c = pt_carrier_for(kind);
+    int64_t since = bs_now_ms() - bs_reset_ms;
+    if (since < BS_BEFORE_OPEN_MS)
+        usleep((useconds_t)(BS_BEFORE_OPEN_MS - since) * 1000);
+    int port = c.sys ? sceAudioOutSysOpen(0xFF, c.mode) : sceAudioOutExOpen(0xFF, c.mode);
+    if (port < 0) {
+        fprintf(stderr, "VLC-PS5: passthrough: %sOpen(%d) %#x\n", c.sys ? "Sys" : "Ex", c.mode, port);
+        return false;
+    }
+    /* SysConfigureOutput's first argument is the output type (1, HDMI);
+     * ExConfigureOutput's must be 0. */
+    int rc = c.sys ? sceAudioOutSysConfigureOutput(1, 0, c.mode, BS_TARGET_HDMI, 0)
+                   : sceAudioOutExConfigureOutput(0, 0, c.mode, BS_TARGET_HDMI, 0);
+    fprintf(stderr, "VLC-PS5: passthrough: %s on mode %d, port %#x, configure %#x\n", pt_kind_name(kind),
+            c.mode, port, rc);
+    if (rc < 0) {
+        if (c.sys)
+            sceAudioOutSysClose(port);
+        else
+            sceAudioOutExClose(port);
+        /* The switch may have half happened: back to normal for sure. */
+        sceAudioOutExConfigureOutput(0, 0, 0xFF, 0xFF, 0);
+        bs_reset_ms = bs_now_ms();
+        return false;
+    }
+    bs_port = port;
+    bs_kind = kind;
+    /* Null data while the receiver follows the switch. */
+    size_t bytes = pt_grain_bytes(kind);
+    uint8_t *grain = malloc(bytes);
+    if (grain) {
+        pt_null_grain(grain, bytes);
+        unsigned grains = BS_LEAD_IN_MS * c.rate / 1000 / c.grain_frames;
+        for (unsigned i = 0; i < grains; i++)
+            sceAudioOutOutput(port, grain);
+        free(grain);
+    }
+    return true;
+}
+
+bool plat_bitstream_start(int kind)
+{
+    if (kind < 0 || kind >= PT_KINDS)
+        return false;
+    pthread_mutex_lock(&bs_lock);
+    bool ok = true;
+    switch (pt_plan((enum pt_kind)bs_kind, (enum pt_kind)kind)) {
+    case PT_STAY:
+        break;
+    case PT_SWITCH:
+        bs_close_locked();
+        ok = bs_open_locked((enum pt_kind)kind);
+        break;
+    case PT_OPEN:
+        ok = bs_open_locked((enum pt_kind)kind);
+        break;
+    case PT_RESET: /* not reachable: kind is a bitstream */
+        break;
+    }
+    bs_writing = ok;
+    pthread_mutex_unlock(&bs_lock);
+    return ok;
+}
+
+void plat_bitstream_output(const void *grain)
+{
+    /* No lock: only the writer outputs, and reset is refused while it runs. */
+    if (bs_port >= 0)
+        sceAudioOutOutput(bs_port, grain);
+}
+
+void plat_bitstream_stop(void)
+{
+    pthread_mutex_lock(&bs_lock);
+    bs_writing = false;
+    pthread_mutex_unlock(&bs_lock);
+}
+
+bool plat_bitstream_reset(void)
+{
+    pthread_mutex_lock(&bs_lock);
+    bool ok = !bs_writing;
+    if (ok)
+        bs_close_locked();
+    pthread_mutex_unlock(&bs_lock);
+    return ok;
+}
+
+bool plat_bitstream_on(void)
+{
+    pthread_mutex_lock(&bs_lock);
+    bool on = bs_kind != PT_NONE;
+    pthread_mutex_unlock(&bs_lock);
+    return on;
 }
 
 const char *plat_screenshot_path(uint64_t frame)

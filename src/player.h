@@ -124,9 +124,20 @@ int player_eq();
 void player_set_eq(int preset);
 
 /* Sound output: 0 stereo (VLC downmixes surround files), 1 surround (5.1/7.1
- * files go out on 8 channels). From the next file. Remembered. */
+ * files go out on 8 channels), 2 passthrough (Dolby and DTS the soundbar
+ * lists go out untouched for it to decode; everything else as surround).
+ * From the next file. Remembered. */
+enum { AUDIO_OUT_STEREO, AUDIO_OUT_SURROUND, AUDIO_OUT_PASSTHROUGH, AUDIO_OUT_COUNT };
 int player_audio_output();
 void player_set_audio_output(int mode);
+const char *player_audio_output_name(int mode);
+/* Passthrough: how long the soundbar takes to decode (ms, 0-500), so the
+ * sound is sent that much earlier. From the next file. Remembered. */
+int player_passthrough_delay();
+void player_set_passthrough_delay(int ms);
+/* True while the soundbar decodes (HDMI carries a bitstream): the app's
+ * volume, equalizer and night mode don't reach the sound then. */
+bool player_passthrough_on();
 /* Night mode: loud parts quieter, voices clearer. Live, remembered. */
 bool player_night_mode();
 void player_set_night_mode(bool on);

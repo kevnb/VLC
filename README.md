@@ -123,6 +123,7 @@ Optional full access. With etaHEN, OnionHEN or the Helper, VLC can lift its sand
 | Night mode (compressor) | ✅ |
 | Volume boost up to 200 % | ✅ |
 | Preferred audio language | ✅ |
+| HDMI passthrough to a soundbar or receiver: Dolby Digital, Dolby Digital Plus (Atmos), TrueHD (Atmos), DTS, DTS-HD | Testing |
 
 ### 💬 Subtitles
 

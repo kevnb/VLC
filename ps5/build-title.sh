@@ -37,8 +37,9 @@ rm -rf "$work"
 mkdir -p "$work/obj" "$work/stubs"
 
 # 1. The plugin table and the library list, read with the PS5 toolchain's nm.
-#    Plus our own plugins (ps5/modules): ps5http, http(s) through the console.
-TARGET=ps5 NM="$sdk/bin/prospero-nm" APP_MODULES="vlc_entry__ps5http vlc_entry__ps5vdec" \
+#    Plus our own plugins (ps5/modules): ps5http, http(s) through the console;
+#    ps5vdec, the video decoder; ps5aout, sound (and HDMI passthrough).
+TARGET=ps5 NM="$sdk/bin/prospero-nm" APP_MODULES="vlc_entry__ps5http vlc_entry__ps5vdec vlc_entry__ps5aout" \
     bash "$here/gen-static-modules.sh" "$static"
 
 # 2. Our objects, in an archive so --exclude-libs=ALL keeps them out of the
@@ -52,8 +53,10 @@ cxxflags=(-std=c++17 -fno-exceptions -fno-rtti -Wno-missing-field-initializers)
 cc "${cflags[@]}" -c "$static/static_modules.c" -o "$work/obj/static_modules.o"
 cc "${cflags[@]}" -std=c11 -c "$repo/third_party/volk/volk.c" -o "$work/obj/volk.o"
 cc "${cflags[@]}" -std=gnu11 -c "$repo/src/platform_ps5.c" -o "$work/obj/platform_ps5.o"
+cc "${cflags[@]}" -std=gnu11 -c "$repo/src/passthrough.c" -o "$work/obj/passthrough.o"
 cc "${cflags[@]}" -std=gnu11 -c "$here/modules/ps5http.c" -o "$work/obj/ps5http.o"
 cc "${cflags[@]}" -std=gnu11 -c "$here/modules/ps5vdec.c" -o "$work/obj/ps5vdec.o"
+cc "${cflags[@]}" -std=gnu11 -c "$here/modules/ps5aout.c" -o "$work/obj/ps5aout.o"
 for f in imgui imgui_draw imgui_tables imgui_widgets; do
     cc "${cflags[@]}" "${cxxflags[@]}" -c "$repo/third_party/imgui/$f.cpp" -o "$work/obj/$f.o"
 done

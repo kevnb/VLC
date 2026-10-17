@@ -4759,20 +4759,20 @@ void setup_begin(bool with_logo);
 enum {
     ST_DECODING, ST_ALANG, ST_SLANG, ST_SOUND, ST_NIGHT, ST_SPEAKERS, ST_THEME, ST_HAPTICS,
     ST_SWIPES, ST_REPEAT, ST_SHUFFLE, ST_DEBUG, ST_STORAGE, ST_VERSION, ST_RELOAD, ST_ABOUT,
-    ST_WEB, ST_LOOK, ST_OSUB, ST_UILANG, ST_SETUP, ST_BDREGION, ST_COUNT
+    ST_WEB, ST_LOOK, ST_OSUB, ST_UILANG, ST_SETUP, ST_BDREGION, ST_PTDELAY, ST_COUNT
 };
 const char *const st_labels[ST_COUNT] = {
     "Decoding", "Audio language", "Subtitle language", "Sound output", "Night mode",
     "Speaker test", "Theme", "Controller vibration", "Touchpad swipes", "Repeat the list", "Shuffle",
     "Detailed log", "Storage", "Version", "Reload drives", "About VLC", "Phone access", "Look",
-    "Subtitle downloads", "Language", "Run setup again", "Blu-ray region",
+    "Subtitle downloads", "Language", "Run setup again", "Blu-ray region", "Passthrough delay",
 };
 /* One line under the focused setting: what it does. */
 const char *const st_help[ST_COUNT] = {
     "Auto switches to fast decoding when a video can't keep up",
     "The audio track VLC picks first, when a file has several",
     "The subtitles VLC turns on by itself",
-    "Surround sends 5.1 and 7.1 files to every speaker of a home cinema",
+    "Surround sends 5.1 and 7.1 files to every speaker. Passthrough lets your soundbar decode Dolby (Atmos too) and DTS",
     "Quieter explosions, clearer voices: for late evenings",
     "A tone goes round your speakers, one after another",
     "The accent colour. Add your own with vlc-theme.txt on a drive",
@@ -4791,6 +4791,7 @@ const char *const st_help[ST_COUNT] = {
     "The language of VLC's menus",
     "Language, look and playback, chosen again",
     "A: the Americas and East Asia. B: Europe, Africa and Oceania. C: China, Russia and India",
+    "With passthrough: sends the sound earlier by the time your soundbar takes to decode it, for lip sync",
 };
 
 /* Categories: an icon, a name, and their settings. */
@@ -4802,7 +4803,7 @@ struct SettingsCat {
 enum { SI_PLAY, SI_SOUND, SI_THEME, SI_LIST, SI_GEAR };
 const SettingsCat settings_cats[] = {
     { "Playback", SI_PLAY, { ST_DECODING, ST_ALANG, ST_SLANG, ST_OSUB, ST_BDREGION } },
-    { "Sound", SI_SOUND, { ST_SOUND, ST_NIGHT, ST_SPEAKERS } },
+    { "Sound", SI_SOUND, { ST_SOUND, ST_PTDELAY, ST_NIGHT, ST_SPEAKERS } },
     { "Interface", SI_THEME, { ST_UILANG, ST_LOOK, ST_THEME, ST_SWIPES } },
     { "Playlists", SI_LIST, { ST_REPEAT, ST_SHUFFLE } },
     { "System", SI_GEAR, { ST_WEB, ST_STORAGE, ST_RELOAD, ST_SETUP, ST_DEBUG, ST_ABOUT } },
@@ -4927,7 +4928,7 @@ void setting_icon(int id, float cx, float cy, float s, ImU32 col)
     case ST_ALANG: case ST_UILANG: si_globe(cx, cy, s, col); break;
     case ST_SLANG: case ST_OSUB: icon_cc(cx, cy, s * 0.9f, col); break;
     case ST_BDREGION: si_globe(cx, cy, s, col); break;
-    case ST_SOUND: icon_speaker(cx, cy, s * 0.85f, col); break;
+    case ST_SOUND: case ST_PTDELAY: icon_speaker(cx, cy, s * 0.85f, col); break;
     case ST_NIGHT: si_moon(cx, cy, s, col); break;
     case ST_SPEAKERS: si_surround(cx, cy, s, col); break;
     case ST_THEME: si_palette(cx, cy, s, col); break;
@@ -4965,6 +4966,12 @@ void cycle_language(bool sub, int step)
         player_set_languages(languages[i].code, player_sub_language());
 }
 
+/* The sound output after the current one: Stereo, Surround, Passthrough. */
+int next_audio_output(int dir)
+{
+    return (player_audio_output() + AUDIO_OUT_COUNT + dir) % AUDIO_OUT_COUNT;
+}
+
 std::string st_value(int id)
 {
     static const char *const dec[] = { "Auto (fast when needed)", "Always fast", "Full quality" };
@@ -4972,7 +4979,8 @@ std::string st_value(int id)
     case ST_DECODING: return dec[player_decode_mode()];
     case ST_ALANG: return lang_name(player_audio_language(), false);
     case ST_SLANG: return lang_name(player_sub_language(), true);
-    case ST_SOUND: return player_audio_output() ? "Surround 5.1 / 7.1" : "Stereo";
+    case ST_SOUND: return player_audio_output_name(player_audio_output());
+    case ST_PTDELAY: return trf("%d ms", player_passthrough_delay());
     case ST_NIGHT: return player_night_mode() ? "On" : "Off";
     case ST_SPEAKERS: return "";
     case ST_THEME: {
@@ -5019,9 +5027,19 @@ void st_change(int id, int step)
         toast("Blu-ray region: from the next disc you open", 2.5);
         break;
     }
-    case ST_SOUND:
-        player_set_audio_output(!player_audio_output());
-        toast(player_audio_output() ? "Surround: 5.1 / 7.1 files from the next one you open" : "Stereo from the next file", 3);
+    case ST_SOUND: {
+        player_set_audio_output(next_audio_output(dir));
+        static const char *const said[AUDIO_OUT_COUNT] = {
+            "Stereo from the next file",
+            "Surround: 5.1 / 7.1 files from the next one you open",
+            "Passthrough: Dolby and DTS your soundbar decodes, from the next file",
+        };
+        toast(said[player_audio_output()], 3);
+        break;
+    }
+    case ST_PTDELAY:
+        player_set_passthrough_delay(player_passthrough_delay() + dir * 10);
+        toast("From the next file you open", 2);
         break;
     case ST_NIGHT: player_set_night_mode(!player_night_mode()); break;
     case ST_SPEAKERS:
@@ -5702,7 +5720,10 @@ std::string setting_value(int id)
     case SET_FLIP:
         return pa.mirror && pa.upside_down ? "Both ways" : pa.mirror ? "Mirror" : pa.upside_down ? "Upside down" : "Off";
     case SET_SHARPEN: return pa.sharpen ? std::to_string(pa.sharpen) + "%" : "Off";
-    case SET_SOUND_OUT: return player_audio_output() ? "Surround" : "Stereo";
+    case SET_SOUND_OUT: {
+        static const char *const short_names[AUDIO_OUT_COUNT] = { "Stereo", "Surround", "Passthrough" };
+        return short_names[player_audio_output()];
+    }
     case SET_NIGHT: return player_night_mode() ? "On" : "Off";
     case SET_REPEAT: return loop_on() ? "On" : "Off";
     case SET_SHUFFLE: return pref_int("shuffle", 0) ? "On" : "Off";
@@ -5809,7 +5830,7 @@ void setting_change(int id, int step)
     }
     case SET_SHARPEN: pa.sharpen = step ? clamp(pa.sharpen + step * 10, 0, 100) : 0; break;
     case SET_SOUND_OUT:
-        player_set_audio_output(!player_audio_output());
+        player_set_audio_output(next_audio_output(step < 0 ? -1 : 1));
         toast("From the next file you open", 2);
         break;
     case SET_NIGHT: player_set_night_mode(!player_night_mode()); break;
@@ -5869,11 +5890,17 @@ void modal_tracks()
     if (all || panel_section == SEC_AUDIO) {
         e.push_back({ 0, 0, "Audio", false, "" });
         char vol[32];
-        snprintf(vol, sizeof(vol), tr("Volume  %d%%"), player_volume());
-        e.push_back({ 5, 0, vol, false, "" });
-        e.push_back({ 7, SET_AUDIO_DELAY, "Audio delay", false, "" });
-        e.push_back({ 7, SET_EQ, "Equalizer", false, "" });
-        e.push_back({ 7, SET_NIGHT, "Night mode", false, "" });
+        if (player_passthrough_on()) {
+            /* The soundbar decodes: volume, equalizer and night mode are its own. */
+            e.push_back({ 5, 0, "Decoded by your soundbar", false, "" });
+            e.push_back({ 7, SET_AUDIO_DELAY, "Audio delay", false, "" });
+        } else {
+            snprintf(vol, sizeof(vol), tr("Volume  %d%%"), player_volume());
+            e.push_back({ 5, 0, vol, false, "" });
+            e.push_back({ 7, SET_AUDIO_DELAY, "Audio delay", false, "" });
+            e.push_back({ 7, SET_EQ, "Equalizer", false, "" });
+            e.push_back({ 7, SET_NIGHT, "Night mode", false, "" });
+        }
         e.push_back({ 7, SET_SOUND_OUT, "Sound output", false, "" });
         int at = player_audio_track();
         for (const Track &t : player_audio_tracks())
@@ -7601,13 +7628,13 @@ void setup_page_draw(int p, float ox, float a, bool active, float since)
                 else if (setup_row == 1)
                     cycle_language(true, dir);
                 else
-                    player_set_audio_output(!player_audio_output());
+                    player_set_audio_output(next_audio_output(dir));
                 changed_at[setup_row] = now;
             }
         }
         static const char *const labels[3] = { "Audio language", "Subtitle language", "Sound output" };
         std::string values[3] = { lang_name(player_audio_language(), false), lang_name(player_sub_language(), true),
-                                  player_audio_output() ? "Surround 5.1 / 7.1" : "Stereo" };
+                                  player_audio_output_name(player_audio_output()) };
         const float rw = 1100, rh = 100;
         float x = cx - rw / 2;
         for (int r = 0; r < 3; r++) {

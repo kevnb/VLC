@@ -243,6 +243,38 @@ void plat_audio_output_surround(const int16_t *frames)
     plat_audio_output(frames);
 }
 
+/* No HDMI here: every file is decoded. */
+bool plat_bitstream_sink(struct pt_sink *sink)
+{
+    (void)sink;
+    return false;
+}
+
+bool plat_bitstream_start(int kind)
+{
+    (void)kind;
+    return false;
+}
+
+void plat_bitstream_output(const void *grain)
+{
+    (void)grain;
+}
+
+void plat_bitstream_stop(void)
+{
+}
+
+bool plat_bitstream_reset(void)
+{
+    return true;
+}
+
+bool plat_bitstream_on(void)
+{
+    return false;
+}
+
 const char *plat_screenshot_path(uint64_t frame)
 {
     for (int i = 0; i < nsteps; i++)

@@ -48,6 +48,8 @@ idummy
 
 # decoders
 avcodec
+# passthrough: compressed audio as is, for ps5aout to send over HDMI
+spdif
 dav1d
 araw
 lpcm
@@ -118,6 +120,8 @@ marq
 
 # audio: formats, resampling, channels, volume, speed
 audio_format
+# Dolby and DTS packed as IEC 61937 bursts (ps5aout's passthrough)
+tospdif
 ugly_resampler
 scaletempo
 trivial_channel_mixer

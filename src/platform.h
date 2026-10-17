@@ -90,6 +90,30 @@ void plat_audio_output(const int16_t *frames);
 bool plat_audio_open_surround(void);
 void plat_audio_output_surround(const int16_t *frames);
 
+/* Passthrough (see passthrough.h): the HDMI output carries a bitstream for the
+ * soundbar to decode. While it does, every PCM port of the app is muted.
+ *
+ * Sticky: plat_bitstream_start() with the bitstream already on keeps it as it
+ * is; plat_bitstream_stop() leaves the HDMI mode on for the next file; only
+ * plat_bitstream_reset() goes back to normal output. One writer at a time,
+ * the thread between start and stop. False/no-ops in the host build. */
+struct pt_sink;
+/* What the TV or receiver decodes (its EDID). False if the console can't say. */
+bool plat_bitstream_sink(struct pt_sink *sink);
+/* Open the port for `kind` (an enum pt_kind) and switch HDMI to it, or keep
+ * it if it's already that one. False if the console refused: normal output. */
+bool plat_bitstream_start(int kind);
+/* One grain: pt_grain_bytes(kind) bytes of IEC 61937 data. Blocks until the
+ * previous grain has played, which paces the caller. */
+void plat_bitstream_output(const void *grain);
+/* The writer is done; the port and mode stay for the next file. */
+void plat_bitstream_stop(void);
+/* Back to normal PCM output, if a bitstream mode is on. Refused (false) while
+ * a writer is between start and stop. */
+bool plat_bitstream_reset(void);
+/* True while the HDMI output is in a bitstream mode (sticky included). */
+bool plat_bitstream_on(void);
+
 /* Host test build only: should a screenshot of this frame be saved, and where. */
 const char *plat_screenshot_path(uint64_t frame);
 /* Host test build only: true once the script is done. */
